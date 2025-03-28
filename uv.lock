@@ -2432,11 +2432,11 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "ag2" },
+    { name = "fire" },
     { name = "logfire" },
     { name = "marker-pdf", extra = ["full"] },
     { name = "openai" },
     { name = "pydantic" },
-    { name = "rich" },
 ]
 
 [package.dev-dependencies]
@@ -2470,11 +2470,11 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "ag2", specifier = ">=0.8.4" },
+    { name = "fire", specifier = ">=0.7.0" },
     { name = "logfire", specifier = ">=3.11.0" },
     { name = "marker-pdf", extras = ["full"], specifier = ">=1.6.2" },
     { name = "openai", specifier = ">=1.69.0" },
     { name = "pydantic", specifier = ">=2.10.6" },
-    { name = "rich", specifier = ">=13.9.4" },
 ]
 
 [package.metadata.requires-dev]
