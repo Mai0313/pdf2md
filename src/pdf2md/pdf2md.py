@@ -1,7 +1,6 @@
 from typing import Any
 import asyncio
 from pathlib import Path
-import warnings
 
 from openai import AsyncAzureOpenAI
 import logfire
@@ -13,8 +12,6 @@ from marker.converters.pdf import PdfConverter
 from autogen.agentchat.contrib.img_utils import get_pil_image, pil_to_data_uri
 
 logfire.configure(send_to_logfire=False)
-
-warnings.filterwarnings("ignore", category=ResourceWarning)
 
 
 class DescribeImagesOutput(BaseModel):
