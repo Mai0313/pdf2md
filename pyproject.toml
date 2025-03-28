@@ -68,8 +68,12 @@ authors = [
     { name = "Wei", email = "mai@mai0313.com" },
 ]
 dependencies = [
-    "pydantic>=2.10.5",
-    "pydantic-settings>=2.7.1",
+    "ag2>=0.8.4",
+    "logfire>=3.11.0",
+    "marker-pdf[full]>=1.6.2",
+    "openai>=1.69.0",
+    "pydantic>=2.10.6",
+    "rich>=13.9.4",
 ]
 readme = "README.md"
 requires-python = ">= 3.10"
@@ -163,11 +167,6 @@ content-type = "text/markdown"
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
 path = "README.md"
 
-[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
-# replace relative links with absolute links
-pattern = '\[(.+?)\]\(((?!https?://)\S+?)\)'
-replacement = '[\1](https://github.com/openai/openai-python/tree/main/\g<2>)'
-
 [tool.rye.scripts]
 api = { cmd = "python ./api.py" }
 main = { cmd = "python ./main.py" }
@@ -193,7 +192,7 @@ docs = ["docs_gen", "docs_run"]
 # https://docs.astral.sh/uv/reference/settings
 [tool.uv]
 managed = true
-package = false
+package = true
 check-url = "https://test.pypi.org/simple"
 publish-url = "https://test.pypi.org/legacy/"
 compile-bytecode = true
