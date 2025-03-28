@@ -31,13 +31,13 @@ jobs:
         target:
           - name: Build and Push Image (Base)
             target_step: base
-            tag: ${{ vars.IMAGE }}-base
+            tag: ${{ github.event.repository.name }}-base
             build_args: |
               --build-arg PYTHON_VERSION=3.10
 
           - name: Build and Push Images (Latest / Release)
             target_step: prod
-            tag: ${{ vars.IMAGE }}
+            tag: ${{ github.event.repository.name }}
             build_args: |
               --build-arg PYTHON_VERSION=3.10
 
