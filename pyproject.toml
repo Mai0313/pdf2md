@@ -192,7 +192,7 @@ docs = ["docs_gen", "docs_run"]
 # https://docs.astral.sh/uv/reference/settings
 [tool.uv]
 managed = true
-package = true
+package = false
 check-url = "https://test.pypi.org/simple"
 publish-url = "https://test.pypi.org/legacy/"
 compile-bytecode = true

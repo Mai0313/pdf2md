@@ -2429,7 +2429,7 @@ wheels = [
 [[package]]
 name = "pdf2md"
 version = "0.0.1"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "ag2" },
     { name = "fire" },
