@@ -62,7 +62,7 @@ omit = ["./src/ameba/*"]
 
 [project]
 name = "pdf2md"
-version = "0.0.1"
+version = "0.0.1.dev6"
 description = "Convert PDF to Markdown powered by LLM"
 authors = [
     { name = "Wei", email = "mai@mai0313.com" },
