@@ -1,32 +1,37 @@
 from typing import Any
 import asyncio
 from pathlib import Path
+import warnings
 
+import httpx
 from openai import AsyncAzureOpenAI
 import logfire
-from pydantic import Field, BaseModel, ConfigDict, computed_field
+from pydantic import Field, BaseModel, ConfigDict, AliasChoices, computed_field
 from marker.models import create_model_dict
 from marker.output import save_output
+from pydantic_settings import BaseSettings
 from marker.config.parser import ConfigParser
 from marker.converters.pdf import PdfConverter
 from autogen.agentchat.contrib.img_utils import get_pil_image, pil_to_data_uri
 
-logfire.configure(send_to_logfire=False)
+warnings.filterwarnings("ignore", category=ResourceWarning)
 
 
-class DescribeImagesOutput(BaseModel):
-    image_url: str = Field(
-        ...,
-        description="The image urls you want to describe, it should be a string of path that pair with the question.",
-        frozen=False,
-        deprecated=False,
-    )
-    answer: str = Field(
-        ..., description="The answer to the question you asked.", frozen=False, deprecated=False
-    )
+class ExtractedImage(BaseModel):
+    idx: int
+    image_url: Path
+    description: str = Field(default="")
+
+    @computed_field
+    @property
+    def description_result(self) -> str:
+        description_result = (
+            f"Here is the image description of {self.image_url}:\n```\n{self.description}\n```"
+        )
+        return description_result
 
 
-class DocsConverter(BaseModel):
+class DocsConverter(BaseSettings):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     path: str = Field(
         default="./docs",
@@ -39,6 +44,35 @@ class DocsConverter(BaseModel):
         description="The maximum number of processes to use for conversion.",
         frozen=False,
         deprecated=False,
+    )
+    user_id: str = Field(
+        default="srv_dvc_tma001",
+        description="The User ID for the LLM API request.",
+        examples=["srv_dvc_tma001", "ds906659"],
+        frozen=False,
+        validation_alias=AliasChoices("USER_ID"),
+        serialization_alias="user_id",
+    )
+    api_key: str = Field(
+        ...,
+        description="The API key for the LLM API request.",
+        examples=["eyJh..."],
+        frozen=False,
+        validation_alias=AliasChoices("API_KEY"),
+        serialization_alias="api_key",
+    )
+    base_url: str = Field(
+        default="https://mlop-azure-gateway.mediatek.inc",
+        description="The base URL for the LLM API request.",
+        examples=[
+            "https://mlop-azure-gateway.mediatek.inc",  # OA
+            "https://mtklm-oa.mediatek.inc/llm/api/v3/models",  # OA CSES Playground
+            "https://mlop-gateway-hwrd.mediatek.inc",  # HWRD
+            "https://mtklm-hwrd.mediatek.inc/llm/api/v3/models",  # HWRD CSES Playground
+        ],
+        frozen=False,
+        validation_alias=AliasChoices("BASE_URL"),
+        serialization_alias="base_url",
     )
 
     @computed_field
@@ -61,8 +95,43 @@ class DocsConverter(BaseModel):
     @computed_field
     @property
     def client(self) -> AsyncAzureOpenAI:
-        client = AsyncAzureOpenAI()
+        client = AsyncAzureOpenAI(
+            api_key=self.api_key,
+            azure_endpoint=self.base_url,
+            api_version="2024-12-01-preview",
+            http_client=httpx.AsyncClient(headers={"X-User-Id": self.user_id}),
+        )
         return client
+
+    async def __process_image(self, extracted_image: ExtractedImage) -> ExtractedImage:
+        # 使用 semaphore 控制並發數量
+        async with self.semaphore:
+            # https://platform.openai.com/docs/guides/vision
+            resolved_path = extracted_image.image_url.resolve().as_posix()
+            if extracted_image.image_url.exists():
+                logfire.info("Processing Image...", image_path=resolved_path)
+                # 如果圖片路徑存在，讀取圖片並轉換成 data uri 格式
+                base64_image = get_pil_image(image_file=resolved_path)
+                image_uri = pil_to_data_uri(base64_image)
+                content: list[dict[str, Any]] = [
+                    {"type": "image_url", "image_url": {"url": image_uri}},
+                    {"type": "text", "text": "Describe the image in detail."},
+                ]
+                # 呼叫 API 取得描述
+                response = await self.client.chat.completions.create(
+                    model="aide-gpt-4o",
+                    messages=[{"role": "user", "content": content}],
+                    temperature=0.0,
+                )
+                result = response.choices[0].message.content
+                if not result:
+                    result = f"The Image Description is Empty: {resolved_path}."
+                    logfire.error(result)
+            else:
+                result = f"Failed to Find the Image: {resolved_path}."
+                logfire.error(result)
+            extracted_image.description = result
+            return extracted_image
 
     async def to_markdown(self) -> None:
         all_docs_paths = [
@@ -73,8 +142,9 @@ class DocsConverter(BaseModel):
             logfire.warn("No pdf files found in the path.")
             return
 
-        config = {"languages": "en", "output_format": "markdown", "output_dir": "parsed"}
-        config_parser = ConfigParser(config)
+        config_parser = ConfigParser(
+            cli_options={"languages": "en", "output_format": "markdown", "output_dir": "parsed"}
+        )
 
         converter = PdfConverter(
             config=config_parser.generate_config_dict(),
@@ -106,79 +176,29 @@ class DocsConverter(BaseModel):
                 output_file.write_text(content, encoding="utf-8")
             logfire.info("Converted Successfully", source=docs_path, output=output_dir.as_posix())
 
-    async def _process_image(self, image_path_or_url: str) -> DescribeImagesOutput:
-        # 使用 semaphore 控制並發數量
-        async with self.semaphore:
-            # https://platform.openai.com/docs/guides/vision
-            image_path = Path(image_path_or_url)
-            resolved_path = image_path.resolve().as_posix()
-            if image_path.exists():
-                logfire.info("Processing Image...", image_path=resolved_path)
-                # 如果圖片路徑存在，讀取圖片並轉換成 data uri 格式
-                base64_image = get_pil_image(image_file=resolved_path)
-                image_uri = pil_to_data_uri(base64_image)
-                content: list[dict[str, Any]] = [
-                    {"type": "image_url", "image_url": {"url": image_uri}},
-                    {"type": "text", "text": "Describe the image in detail."},
-                ]
-                # 呼叫 API 取得描述
-                response = await self.client.chat.completions.create(
-                    model="aide-gpt-4o",
-                    messages=[{"role": "user", "content": content}],
-                    temperature=0.0,
-                )
-                result = response.choices[0].message.content
-            else:
-                logfire.error(
-                    "Cannot find the image, please check the image path.", image_path=resolved_path
-                )
-                result = f"Cannot find the image of {resolved_path}, please check the image path."
-            return DescribeImagesOutput(image_url=resolved_path, answer=result)
-
-    async def _describe_images(
-        self, image_path_or_urls: list[str] | str
-    ) -> list[DescribeImagesOutput]:
-        if isinstance(image_path_or_urls, str):
-            image_path_or_urls = [image_path_or_urls]
-        tasks = [
-            self._process_image(image_path_or_url) for image_path_or_url in image_path_or_urls
-        ]
-        return await asyncio.gather(*tasks)
-
     async def parse_docs_with_images(self) -> None:
         docs_paths = [f for f in self.all_docs_paths if f.name.endswith(".md")]
         docs_paths = [f for f in docs_paths if not f.stem.endswith("_parsed")]
-        if not docs_paths:
-            logfire.info("No parsed markdown files found in the path.")
-            return
         for docs_path in docs_paths:
-            docs_content = docs_path.read_text(encoding="utf-8")
-            # Use regex to find the line starts with `![](_page` and ends with `)`
-            splitted_contents = docs_content.splitlines()
-            docs_parent = docs_path.parent
-            image_path_or_urls = []
-            image_mapping: dict[str, int] = {}
-            for line_idx, line in enumerate(splitted_contents, start=1):
+            docs_contents = docs_path.read_text(encoding="utf-8").splitlines()
+            extracted_images: list[ExtractedImage] = []
+            for idx, line in enumerate(docs_contents, start=1):
                 if line.startswith("![](_page") and line.endswith(")"):
                     image_path_string = line.split("](")[1].split(")")[0]
-                    image_path = docs_parent / image_path_string
+                    image_path = docs_path.parent / image_path_string
                     if image_path.exists():
-                        image_url = image_path.absolute().as_posix()
-                        image_mapping[image_url] = int(line_idx)
-                        image_path_or_urls.append(image_url)
-            if not image_path_or_urls:
-                logfire.info(f"No images found in {docs_path}.", source=docs_path)
-                continue
+                        extracted_images.append(
+                            ExtractedImage(
+                                idx=idx, image_url=image_path.absolute(), description=""
+                            )
+                        )
             # For debugging
-            # image_path_or_urls = image_path_or_urls[:1]
-            parsed_images = await self._describe_images(image_path_or_urls=image_path_or_urls)
+            # extract_images = extract_images[:1]
+            tasks = [self.__process_image(extracted_image) for extracted_image in extracted_images]
+            parsed_images = await asyncio.gather(*tasks)
             for parsed_image in parsed_images:
-                found_line_idx = image_mapping.get(parsed_image.image_url)
-                if found_line_idx:
-                    splitted_contents[line_idx - 1] = (
-                        f"Here is the image description:\n```\n{parsed_image.answer}\n```"
-                    )
-            parsed_content = "\n".join(splitted_contents)
+                docs_contents[parsed_image.idx - 1] = parsed_image.description_result
+            parsed_content = "\n".join(docs_contents)
             new_docs_path = docs_path.with_name(f"{docs_path.stem}_parsed{docs_path.suffix}")
             new_docs_path.write_text(parsed_content, encoding="utf-8")
             logfire.info("Parsed Successfully", source=docs_path, output=new_docs_path.as_posix())
@@ -189,11 +209,8 @@ class DocsConverter(BaseModel):
 
 
 if __name__ == "__main__":
-    import fire
+    import asyncio
 
-    # python convert_docs.py to_markdown --path="./docs/Bandgap Reference Verification_RAK.pdf"
-    # python convert_docs.py to_markdown --path="./docs"
-    # python scripts/convert_docs.py parse_docs_with_images --path="./docs/Bandgap References"
-    # python scripts/convert_docs.py parse_docs_with_images --path="./docs"
-
-    fire.Fire(DocsConverter)
+    converter = DocsConverter(path="./docs/pdfs")
+    asyncio.run(converter.to_markdown())
+    # asyncio.run(converter.parse_docs_with_images())
